@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>野灣保育探索館排班表</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <style>
+        body { font-family: "Microsoft JhengHei", "Heiti TC", sans-serif; background: #f0f4f3; padding: 20px; color: #333; }
+        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }
+        
+        h1 { color: #388e3c; text-align: center; margin: 0 0 10px 0; font-size: 1.8em; letter-spacing: 1px; }
+        .sub-info { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 25px; }
+        
+        /* 讀取狀態 */
+        #status-box { text-align: center; padding: 40px; }
+        .loading-spinner { border: 4px solid #f3f3f3; border-top: 4px solid #388e3c; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 0 auto 15px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .error-msg { color: #d32f2f; background: #ffebee; padding: 15px; border-radius: 8px; display: inline-block; text-align: left; }
+        .retry-btn { margin-top: 10px; background: #388e3c; color: white; border: none; padding: 8px 20px; border-radius: 20px; cursor: pointer; font-size: 0.9em; }
+        .retry-btn:hover { background: #2e7d32; }
+
+        /* 月曆本體 */
+        .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+        .day-head { background: #e8f5e9; color: #2e7d32; padding: 10px 0; text-align: center; font-weight: bold; border-radius: 6px; font-size: 0.95em; }
+        
+        .cell { 
+            background: #fff; border: 1px solid #e0e0e0; min-height: 85px; padding: 8px; border-radius: 8px; 
+            display: flex; flex-direction: column; justify-content: space-between;
+            transition: transform 0.1s;
+        }
+        .cell:hover { border-color: #81c784; }
+
+        .date-num { font-weight: bold; color: #546e7a; font-size: 1.1em; margin-bottom: 4px; }
+        
+        /* 人員標籤 */
+        .tag { 
+            text-align: center; padding: 4px 0; border-radius: 6px; 
+            font-size: 0.9em; font-weight: bold; margin-top: auto; 
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+        .tag-enya { background: #dcedc8; color: #33691e; border: 1px solid #c5e1a5; } /* 林恩雅 */
+        .tag-hong { background: #ffecb3; color: #ff6f00; border: 1px solid #ffe082; } /* 黃虹瑛 */
+        .tag-niu { background: #b3e5fc; color: #01579b; border: 1px solid #81d4fa; }  /* 牛韻茹 */
+        
+        /* 公休 */
+        .off-day { background-color: #fafafa; background-image: repeating-linear-gradient(45deg, #f5f5f5, #f5f5f5 5px, #eeeeee 5px, #eeeeee 10px); }
+        .tag-off { background: #e0e0e0; color: #757575; font-size: 0.8em; width: 60%; margin: auto; padding: 2px 0; border-radius: 10px; }
+
+        /* 手機 RWD */
+        @media (max-width: 600px) {
+            .container { padding: 15px; }
+            .grid { display: flex; flex-direction: column; gap: 0; }
+            .day-head { display: none; }
+            .cell { 
+                flex-direction: row; align-items: center; min-height: auto; 
+                margin-bottom: 8px; padding: 12px; border-bottom: 2px solid #eee; 
+            }
+            .date-num { width: 50px; margin-bottom: 0; }
+            .tag { width: auto; min-width: 90px; margin-top: 0; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1 id="title">野灣保育探索館排班</h1>
+    <div class="sub-info">最後更新：<span id="updateTime">...</span></div>
+
+    <div id="status-box">
+        <div class="loading-spinner"></div>
+        <div>正在下載最新排班資料...</div>
+    </div>
+
+    <div id="calendar" class="grid" style="display:none;"></div>
+</div>
+
+<script>
+    // 設定區
+    const googleSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRGMCRoaKLdiCnXS4EPJQ8xsLc7I3wCEnNv-eMwmCFNJdzrE5rKfC4364YZh7Kj55z0cc67xlkQkz_G/pub?gid=565009246&single=true&output=csv';
+    
+    // 【更新】使用 corsproxy.io (速度較快，且支援直接串接)
+    // 加上時間戳記 &t=... 確保 Google 回傳最新資料
+    const targetUrl = googleSheetUrl + '&t=' + new Date().getTime();
+    const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(targetUrl);
+
+    const STAFF = {
+        '雅': { name: '林恩雅', cls: 'tag-enya' },
+        '瑛': { name: '黃虹瑛', cls: 'tag-hong' },
+        '牛': { name: '牛韻茹', cls: 'tag-niu' },
+        'x': { name: '-', cls: '' }
+    };
+
+    function init() {
+        // 使用 Fetch 抓取
+        fetch(proxyUrl)
+            .then(response => {
+                if (!response.ok) throw new Error(`連線錯誤 (${response.status})`);
+                return response.text();
+            })
+            .then(csvText => {
+                // 解析 CSV
+                Papa.parse(csvText, {
+                    header: false,
+                    skipEmptyLines: true,
+                    complete: function(results) {
+                        try {
+                            renderSchedule(results.data);
+                            // 成功後隱藏讀取動畫，顯示月曆
+                            document.getElementById('status-box').style.display = 'none';
+                            document.getElementById('calendar').style.display = 'grid'; // 手機版會被 CSS 覆蓋為 flex，沒關係
+                            if(window.innerWidth <= 600) document.getElementById('calendar').style.display = 'flex'; // 修正手機版顯示
+                            
+                            document.getElementById('updateTime').innerText = new Date().toLocaleTimeString('zh-TW', {hour:'2-digit', minute:'2-digit'});
+                        } catch (e) {
+                            showError("資料解析失敗：" + e.message);
+                        }
+                    }
+                });
+            })
+            .catch(err => {
+                showError("無法讀取資料，請檢查網路。<br>錯誤訊息：" + err.message);
+            });
+    }
+
+    function renderSchedule(data) {
+        // 1. 倒敘搜尋：從最後一行往上找，找到第一個出現「最終班表」的行數
+        let scheduleRowIndex = -1;
+        for (let i = data.length - 1; i >= 0; i--) {
+            // 檢查第一欄是否包含關鍵字
+            if (data[i][0] && data[i][0].toString().includes('最終班表')) {
+                scheduleRowIndex = i;
+                break;
+            }
+        }
+
+        if (scheduleRowIndex === -1) throw new Error("在表格中找不到「最終班表」欄位");
+
+        // 2. 鎖定資料區塊 (年/日/班表)
+        const scheduleRow = data[scheduleRowIndex];
+        const dateRow = data[scheduleRowIndex - 1]; 
+        const yearRow = data[scheduleRowIndex - 2]; 
+
+        if (!dateRow || !yearRow) throw new Error("排班表上方缺少日期或年月資料");
+
+        // 3. 取得年月
+        const ymText = yearRow[1]; // 例如 2026.01
+        const [yStr, mStr] = ymText.split('.');
+        const year = parseInt(yStr);
+        const month = parseInt(mStr);
+
+        // 更新標題
+        document.getElementById('title').innerText = `野灣保育探索館：${month} 月排班`;
+
+        // 4. 繪製
+        const cal = document.getElementById('calendar');
+        cal.innerHTML = '';
+
+        // 星期頭
+        ['日', '一', '二', '三', '四', '五', '六'].forEach(d => {
+            const head = document.createElement('div');
+            head.className = 'day-head';
+            head.innerText = d;
+            cal.appendChild(head);
+        });
+
+        const daysInMonth = new Date(year, month, 0).getDate();
+        const firstDayWeek = new Date(year, month - 1, 1).getDay();
+
+        // 填補前面空白 (僅電腦版需要)
+        if (window.innerWidth > 600) {
+            for(let i=0; i<firstDayWeek; i++) {
+                cal.innerHTML += `<div style="background:transparent;"></div>`;
+            }
+        }
+
+        // 產生每一天
+        for (let d = 1; d <= daysInMonth; d++) {
+            const dateObj = new Date(year, month - 1, d);
+            const weekDay = dateObj.getDay(); // 0=日, 3=三
+
+            // 找 CSV 對應的欄位
+            let dataIdx = -1;
+            // 從第 1 欄 (B欄) 開始找日期
+            for(let k=1; k < dateRow.length; k++) {
+                if(parseInt(dateRow[k]) === d) {
+                    dataIdx = k;
+                    break;
+                }
+            }
+
+            let cellClass = 'cell';
+            let content = '';
+
+            // 邏輯判斷
+            if (weekDay === 3) {
+                // 週三公休
+                cellClass += ' off-day';
+                content = `<div class="tag tag-off">公休</div>`;
+            } else if (dataIdx !== -1 && scheduleRow[dataIdx]) {
+                const code = scheduleRow[dataIdx].trim();
+                const staff = STAFF[code];
+                
+                if (staff) {
+                    content = `<div class="tag ${staff.cls}">${staff.name}</div>`;
+                } else if (code !== 'x' && code !== '') {
+                    // 未知代號
+                    content = `<div class="tag" style="background:#eee">${code}</div>`;
+                }
+            }
+
+            // 手機版顯示星期幾
+            const wStr = ['日','一','二','三','四','五','六'][weekDay];
+            const dateHtml = window.innerWidth <= 600 ? `${d} <small style="color:#aaa; font-weight:normal;">(${wStr})</small>` : d;
+
+            cal.innerHTML += `
+                <div class="${cellClass}">
+                    <div class="date-num">${dateHtml}</div>
+                    ${content}
+                </div>
+            `;
+        }
+    }
+
+    function showError(msg) {
+        const box = document.getElementById('status-box');
+        box.innerHTML = `
+            <div class="error-msg">⚠️ ${msg}</div>
+            <br>
+            <button class="retry-btn" onclick="location.reload()">重新整理</button>
+        `;
+    }
+
+    // 啟動
+    init();
+
+</script>
+
+</body>
+</html>
