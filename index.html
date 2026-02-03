@@ -84,7 +84,10 @@
     };
 
     function init() {
-        fetch(proxyUrl)
+        // 嘗試直接讀取，不經過 Proxy
+        const finalUrl = publishedCsvUrl + '&t=' + new Date().getTime();
+    
+        fetch(finalUrl) // 直接用 Google 的 URL
             .then(response => {
                 if (!response.ok) throw new Error(`連線錯誤 (${response.status}) - 請確認網址是否正確`);
                 return response.text();
